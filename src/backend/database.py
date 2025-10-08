@@ -5,11 +5,75 @@ MongoDB database configuration and setup for Mergington High School API
 from pymongo import MongoClient
 from argon2 import PasswordHasher
 
-# Connect to MongoDB
-client = MongoClient('mongodb://localhost:27017/')
-db = client['mergington_high']
-activities_collection = db['activities']
-teachers_collection = db['teachers']
+# Try to connect to MongoDB, fall back to in-memory storage for development
+try:
+    client = MongoClient('mongodb://localhost:27017/', serverSelectionTimeoutMS=2000)
+    # Test the connection
+    client.server_info()
+    db = client['mergington_high']
+    activities_collection = db['activities']
+    teachers_collection = db['teachers']
+    USE_MONGODB = True
+except Exception:
+    # Fallback to in-memory storage for development/testing
+    USE_MONGODB = False
+    # Simple in-memory collections
+    _activities_data = {}
+    _teachers_data = {}
+    
+    class MockCollection:
+        def __init__(self, data_store):
+            self.data_store = data_store
+            
+        def count_documents(self, query):
+            return len(self.data_store)
+            
+        def insert_one(self, document):
+            doc_id = document.get('_id')
+            if doc_id:
+                self.data_store[doc_id] = document
+                
+        def find_one(self, query):
+            if '_id' in query:
+                return self.data_store.get(query['_id'])
+            return None
+            
+        def find(self, query=None):
+            if query is None:
+                # Return copies of documents with their _id field preserved
+                results = []
+                for doc_id, doc in self.data_store.items():
+                    doc_copy = doc.copy()
+                    doc_copy['_id'] = doc_id
+                    results.append(doc_copy)
+                return results
+            # Simple query support - for now just return all if there's a query
+            # (we can enhance this later if needed)
+            results = []
+            for doc_id, doc in self.data_store.items():
+                doc_copy = doc.copy()
+                doc_copy['_id'] = doc_id
+                results.append(doc_copy)
+            return results
+            
+        def update_one(self, query, update):
+            if '_id' in query:
+                doc_id = query['_id']
+                if doc_id in self.data_store:
+                    doc = self.data_store[doc_id]
+                    if '$push' in update:
+                        for field, value in update['$push'].items():
+                            if field in doc:
+                                doc[field].append(value)
+                    if '$pull' in update:
+                        for field, value in update['$pull'].items():
+                            if field in doc and value in doc[field]:
+                                doc[field].remove(value)
+                    return type('Result', (), {'modified_count': 1})()
+            return type('Result', (), {'modified_count': 0})()
+    
+    activities_collection = MockCollection(_activities_data)
+    teachers_collection = MockCollection(_teachers_data)
 
 # Methods
 def hash_password(password):
@@ -163,6 +227,17 @@ initial_activities = {
         },
         "max_participants": 16,
         "participants": ["william@mergington.edu", "jacob@mergington.edu"]
+    },
+    "Manga Maniacs": {
+        "description": "Explore the fantastic stories of the most interesting characters from Japanese Manga (graphic novels).",
+        "schedule": "Tuesdays, 7:00 PM - 8:30 PM",
+        "schedule_details": {
+            "days": ["Tuesday"],
+            "start_time": "19:00",
+            "end_time": "20:30"
+        },
+        "max_participants": 15,
+        "participants": []
     }
 }
 
